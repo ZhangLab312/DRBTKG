@@ -21,10 +21,7 @@ from torch_geometric.data import HeteroData
 from torch_geometric.loader import LinkNeighborLoader
 
 
-
-
-
-
+"""随机种子 / Random seed."""
 seed = 42
 random.seed(seed)
 np.random.seed(seed)
@@ -33,16 +30,14 @@ torch.cuda.manual_seed_all(seed)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
+"""计算设备 / Compute device."""
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 PROJECT_ROOT = SCRIPT_DIR if (SCRIPT_DIR / "data").is_dir() else SCRIPT_DIR.parent
 
-
-
-
-
+"""任务定义 / Task definition."""
 node_type1 = "drug"
 node_type2 = "disease"
 rel = "indication"
@@ -50,7 +45,11 @@ rel = "indication"
 EDGE_TYPE = (node_type1, rel, node_type2)
 REV_EDGE_TYPE = (node_type2, "rev_indication", node_type1)
 
+"""配置 / Configuration."""
 config = {
+    "node_type1": "drug",
+    "node_type2": "disease",
+    "relation": "indication",
     "num_samples": 512,
     "batch_size": 164,
     "dropout": 0.2,
@@ -69,10 +68,7 @@ config = {
     ),
 }
 
-
-
-
-
+"""知识图谱数据 / Knowledge graph data."""
 primekg_file = str(PROJECT_ROOT / "data" / "kg.csv")
 df = pd.read_csv(
     primekg_file,
@@ -82,6 +78,7 @@ df = pd.read_csv(
 
 
 
+"""药物 ID 映射 / Drug ID mapping."""
 drug_index_to_drugbank_id = {}
 for side in ("x", "y"):
     for _, row in df.loc[
@@ -110,6 +107,7 @@ for _, row in drug_disease_pairs.iterrows():
 drugs = list(set(drugs))
 diseases = list(set(diseases))
 
+"""图三元组 / Graph triples."""
 new_df = pd.DataFrame()
 new_df[0] = df["x_type"] + "::" + df["x_index"].astype(str)
 new_df[1] = df["relation"]
@@ -122,6 +120,7 @@ entity_dictionary = {}
 
 
 def insert_entry(entry, ent_type, dic):
+    """实体 ID 映射 / Entity ID mapping."""
     if ent_type not in dic:
         dic[ent_type] = {}
 
@@ -129,7 +128,6 @@ def insert_entry(entry, ent_type, dic):
         dic[ent_type][entry] = len(dic[ent_type])
 
     return dic
-
 
 for triple in triplets:
     src = triple[0]
@@ -140,7 +138,6 @@ for triple in triplets:
 
     insert_entry(src, src_type, entity_dictionary)
     insert_entry(dst, dst_type, entity_dictionary)
-
 
 edge_dictionary = {}
 
@@ -162,6 +159,7 @@ for triple in triplets:
     edge_dictionary[edge_type].append((src_int_id, dst_int_id))
 
 
+"""异构图数据 / Heterogeneous graph data."""
 data = HeteroData()
 node_feature_dims = {}
 base_feature_dims = {}
@@ -213,11 +211,7 @@ for edge_type, edges in edge_dictionary.items():
         .contiguous()
     )
 
-
-
-
-
-
+"""训练与验证数据 / Training and validation data."""
 try:
     with open(PROJECT_ROOT / "data" / "train_data" / "train1.pkl", "rb") as file:
         train_data = pickle.load(file)
@@ -233,10 +227,7 @@ except Exception as e:
         "The full graph must never be used as a fallback."
     ) from e
 
-
-
-
-
+"""模型组件 / Model components."""
 from model import (
     EnhancedMLPPredictor,
     FixedSemanticEmbeddingManager,
@@ -253,12 +244,8 @@ configure_model_context(
 semantic_manager = FixedSemanticEmbeddingManager(config)
 
 
-
-
-
-
-
 def attach_drug_text_embeddings(graph):
+    """药物文本嵌入 / Drug text embeddings."""
     num_drugs = graph["drug"].num_nodes
     aligned = torch.zeros(
         num_drugs,
@@ -290,6 +277,7 @@ attach_drug_text_embeddings(val_data)
 
 
 def is_excluded_target_edge_type(edge_type):
+    """目标边类型 / Target edge type."""
     src_type, relation_name, dst_type = edge_type
     return (
         {src_type, dst_type} == {node_type1, node_type2}
@@ -299,6 +287,7 @@ def is_excluded_target_edge_type(edge_type):
 
 
 def get_target_edge_types(graph):
+    """目标边列表 / Target edge types."""
     return [
         edge_type
         for edge_type in graph.edge_types
@@ -307,6 +296,7 @@ def get_target_edge_types(graph):
 
 
 def remove_all_target_edges(graph):
+    """移除目标边 / Remove target edges."""
     graph = copy.deepcopy(graph)
     target_types = get_target_edge_types(graph)
 
@@ -331,6 +321,7 @@ def remove_all_target_edges(graph):
 
 
 def prepare_train_graph_and_labels(graph):
+    """训练图和标签 / Training graph and labels."""
     train_positive_edge_index = graph[EDGE_TYPE].edge_index.cpu()
 
     train_edge_label = torch.ones(
@@ -349,6 +340,7 @@ def prepare_train_graph_and_labels(graph):
 
 
 def prepare_val_labels(graph):
+    """验证标签 / Validation labels."""
     if (
         hasattr(graph[EDGE_TYPE], "edge_label_index")
         and graph[EDGE_TYPE].edge_label_index is not None
@@ -381,6 +373,7 @@ def prepare_val_labels(graph):
 
 
 def define_model(message_passing_graph, dropout):
+    """初始化模型 / Initialize models."""
     projection_net = None
 
     if (
@@ -414,6 +407,7 @@ def define_model(message_passing_graph, dropout):
 
 
 def get_num_neighbors(graph, num_hops=3):
+    """邻居采样数 / Neighbor sample counts."""
     return {
         edge_type: [config["num_samples"]] * num_hops
         for edge_type in graph.edge_types
@@ -421,6 +415,7 @@ def get_num_neighbors(graph, num_hops=3):
 
 
 def define_loaders():
+    """数据加载器 / Data loaders."""
     train_graph, train_edge_label_index, train_edge_label = (
         prepare_train_graph_and_labels(train_data)
     )
@@ -471,6 +466,7 @@ def define_loaders():
 
 
 def compute_loss(scores, labels):
+    """损失函数 / Loss function."""
     pos_count = max((labels == 1).sum().item(), 1)
     neg_count = max((labels == 0).sum().item(), 1)
 
@@ -491,6 +487,7 @@ def compute_loss(scores, labels):
 
 
 def compute_metrics(predictions, labels):
+    """评估指标 / Evaluation metrics."""
     probabilities = torch.sigmoid(predictions).detach().cpu().numpy()
     predicted_labels = (probabilities > 0.5).astype(int)
     true_labels = labels.detach().cpu().numpy()
@@ -518,6 +515,7 @@ def compute_metrics(predictions, labels):
 
 
 def assert_no_target_edges(batch):
+    """目标边检查 / Target edge check."""
     target_types = [
         edge_type
         for edge_type in batch.edge_index_dict
@@ -531,6 +529,7 @@ def assert_no_target_edges(batch):
 
 
 def train_epoch(projection_net, gat, predictor, loader, optimizer):
+    """训练轮次 / Training epoch."""
     gat.train()
     predictor.train()
 
@@ -573,6 +572,7 @@ def train_epoch(projection_net, gat, predictor, loader, optimizer):
 
 @torch.no_grad()
 def evaluate(projection_net, gat, predictor, loader):
+    """验证流程 / Evaluation."""
     gat.eval()
     predictor.eval()
 
@@ -617,6 +617,7 @@ def evaluate(projection_net, gat, predictor, loader):
 
 
 def run(cfg):
+    """训练流程 / Training workflow."""
     train_loader, val_loader, message_passing_graph = define_loaders()
 
     projection_net, gat, predictor = define_model(
