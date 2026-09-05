@@ -1,3 +1,4 @@
+"""模型定义 / Model definitions."""
 import copy
 import pickle
 
@@ -6,9 +7,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GATConv, HeteroConv, Linear
 
-device = None
-node_type1 = None
-node_type2 = None
+"""任务定义 / Task definition"""
+node_type1 = "drug"
+node_type2 = "disease"
+rel = "indication"
 
 
 def configure_model_context(**context):
@@ -16,6 +18,7 @@ def configure_model_context(**context):
 
 
 class FixedSemanticEmbeddingManager:
+    """语义嵌入管理器 / Semantic embedding manager."""
     def __init__(self, cfg):
         self.config = cfg
         self.semantic_embeddings = None
@@ -51,8 +54,6 @@ class FixedSemanticEmbeddingManager:
                 if i >= len(self.semantic_embeddings):
                     break
 
-
-
                 for key in (
                     meta.get("drugbank_id", ""),
                     meta.get("drug_name", ""),
@@ -81,6 +82,7 @@ class FixedSemanticEmbeddingManager:
 
 
 class SemanticProjectionNetwork(nn.Module):
+    """语义投影网络 / Semantic projection network."""
     def __init__(
         self,
         semantic_embedding_dim,
@@ -89,6 +91,7 @@ class SemanticProjectionNetwork(nn.Module):
     ):
         super().__init__()
 
+        # 嵌入投影层 / Embedding projection layers.
         self.projection = nn.Sequential(
             Linear(
                 semantic_embedding_dim,
@@ -109,6 +112,7 @@ class SemanticProjectionNetwork(nn.Module):
 
 
 class ProjectionEnhancedHGAT(nn.Module):
+    """异构图注意力网络 / Heterogeneous graph attention network."""
     def __init__(
         self,
         node_feature_dims,
@@ -125,7 +129,6 @@ class ProjectionEnhancedHGAT(nn.Module):
 
         self.use_semantic_projection = use_semantic_projection
         self.projected_embedding_dim = projected_embedding_dim
-
         self.feature_fusion = nn.ModuleDict()
 
         for node_type, feature_dim in node_feature_dims.items():
@@ -139,6 +142,7 @@ class ProjectionEnhancedHGAT(nn.Module):
 
         self.convs = nn.ModuleList()
 
+        # 各关系的图注意力层 / Relation-specific GAT layers.
         for layer_id in range(num_layers):
             conv_dict = {}
 
@@ -158,7 +162,6 @@ class ProjectionEnhancedHGAT(nn.Module):
             self.convs.append(HeteroConv(conv_dict, aggr="sum"))
 
         self.self_loops = nn.ModuleDict()
-
         for node_type in message_passing_graph.node_types:
             self.self_loops[node_type] = nn.Linear(
                 hidden_channels[-1],
@@ -178,8 +181,6 @@ class ProjectionEnhancedHGAT(nn.Module):
 
         if not self.use_semantic_projection:
             return projected_dict
-
-
 
         for node_type in {"drug", "disease"}:
             if node_type not in x_dict:
@@ -209,13 +210,11 @@ class ProjectionEnhancedHGAT(nn.Module):
             batch,
             projection_net,
         )
-
         fused_x_dict = {}
 
         for node_type, x in x_dict.items():
             if node_type in projected_dict:
                 x = torch.cat([x, projected_dict[node_type]], dim=1)
-
             fused_x_dict[node_type] = self.feature_fusion[node_type](x)
 
         x_dict = fused_x_dict
@@ -224,11 +223,11 @@ class ProjectionEnhancedHGAT(nn.Module):
         for conv in self.convs:
             x_dict_conv = conv(x_dict, edge_index_dict)
             x_dict = {}
-
             for node_type, node_x in x_dict_conv.items():
                 self_loop = self.self_loops[node_type](node_x)
                 x_dict[node_type] = F.relu(node_x + self_loop)
 
+            # 拼接各层输出 / Concatenate layer outputs.
             if not out:
                 out = copy.copy(x_dict)
             else:
@@ -247,13 +246,12 @@ class ProjectionEnhancedHGAT(nn.Module):
 
 
 class EnhancedMLPPredictor(nn.Module):
+    """链接预测器 / Link predictor."""
     def __init__(self, channel_num, dropout):
         super().__init__()
-
         self.L1 = nn.Linear(channel_num * 2, channel_num * 2)
         self.L2 = nn.Linear(channel_num * 2, channel_num)
         self.L3 = nn.Linear(channel_num, 1)
-
         self.bn1 = nn.BatchNorm1d(channel_num * 2)
         self.bn2 = nn.BatchNorm1d(channel_num)
         self.dropout = nn.Dropout(dropout)
@@ -263,5 +261,3 @@ class EnhancedMLPPredictor(nn.Module):
         x = self.dropout(F.relu(self.bn1(self.L1(x))))
         x = self.dropout(F.relu(self.bn2(self.L2(x))))
         return self.L3(x)
-
-
